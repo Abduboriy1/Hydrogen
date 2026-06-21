@@ -153,6 +153,10 @@ public abstract class MixinEntityRenderer {
         }
     }
 
+    /**
+     * @author peanut
+     * @reason Hydrogen overrides mouse-over/reach raytracing.
+     */
     @Overwrite
     public void getMouseOver(float p_getMouseOver_1_) {
         Entity entity = this.mc.getRenderViewEntity();

@@ -82,7 +82,8 @@ public abstract class MixinItemRenderer {
     }
 
     /**
-     * @author
+     * @author peanut
+     * @reason Hydrogen customizes first-person held-item animations.
      */
     @Overwrite
     public void renderItemInFirstPerson(float partialTicks) {

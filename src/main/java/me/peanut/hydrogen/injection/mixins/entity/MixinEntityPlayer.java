@@ -47,7 +47,8 @@ public abstract class MixinEntityPlayer extends MixinEntityLivingBase {
     @Shadow public abstract void onLivingUpdate();
 
     /**
-     * @author
+     * @author peanut
+     * @reason Hydrogen overrides player eye height.
      */
     @Overwrite
     public float getEyeHeight() {

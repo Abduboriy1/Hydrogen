@@ -22,7 +22,8 @@ public class MixinInventoryEffectRenderer extends MixinGuiContainer {
     @Shadow private boolean hasActivePotionEffects;
 
     /**
-     * @author
+     * @author peanut
+     * @reason Hydrogen disables the inventory shift caused by active potion effects.
      */
     @Overwrite
     protected void updateActivePotionEffects() {

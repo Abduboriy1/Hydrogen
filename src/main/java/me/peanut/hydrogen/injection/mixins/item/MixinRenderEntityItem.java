@@ -40,7 +40,8 @@ public abstract class MixinRenderEntityItem extends MixinRender<EntityItem> {
     @Shadow protected abstract int func_177078_a(ItemStack stack);
 
     /**
-     * @author
+     * @author peanut
+     * @reason Hydrogen customizes dropped-item rendering.
      */
     @Overwrite
     public void doRender(EntityItem entity, double x, double y, double z, float entityYaw, float partialTicks) {
@@ -110,7 +111,8 @@ public abstract class MixinRenderEntityItem extends MixinRender<EntityItem> {
     }
 
     /**
-     * @author
+     * @author peanut
+     * @reason Hydrogen controls the dropped-item model render count.
      */
     @Overwrite
     private int func_177077_a(EntityItem itemIn, double p_177077_2_, double p_177077_4_, double p_177077_6_, float p_177077_8_, IBakedModel p_177077_9_) {

@@ -114,6 +114,10 @@ public abstract class MixinGuiMainMenu extends GuiScreen {
 
     @Shadow private String openGLWarningLink;
 
+    /**
+     * @author peanut
+     * @reason Hydrogen replaces the main menu layout.
+     */
     @Overwrite
     public void initGui() {
         this.viewportTexture = new DynamicTexture(256, 256);
@@ -250,6 +254,10 @@ public abstract class MixinGuiMainMenu extends GuiScreen {
         }
     }
 
+    /**
+     * @author peanut
+     * @reason Hydrogen renders a custom main menu screen.
+     */
     @Overwrite
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
         if (Hydrogen.getClient().moduleManager.getModulebyName("MainMenu").isEnabled() && !(Hydrogen.getClient().panic)) {

@@ -48,7 +48,8 @@ public abstract class MixinGuiPlayerTabOverlay extends MixinGui {
     @Shadow protected abstract void drawPing(int p_175245_1_, int p_175245_2_, int p_175245_3_, NetworkPlayerInfo networkPlayerInfoIn);
 
     /**
-     * @author
+     * @author peanut
+     * @reason Hydrogen customizes the tab-list player overlay.
      */
     @Overwrite
     public void renderPlayerlist(int width, Scoreboard scoreboardIn, ScoreObjective scoreObjectiveIn) {

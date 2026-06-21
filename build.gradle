@@ -35,6 +35,8 @@ compileJava {
     sourceCompatibility = targetCompatibility = '1.8'
     // Makes it so u don't need to convert unicode to basic latin for it to be able to build/run.
     options.encoding 'UTF-8'
+    // Silence "source/target value 8 is obsolete" when compiling on a JDK newer than 8.
+    options.compilerArgs += '-Xlint:-options'
 }
 
 minecraft {

@@ -124,7 +124,10 @@ public abstract class MixinEntityPlayerSP extends MixinAbstractClientPlayer {
     @Shadow
     protected abstract boolean pushOutOfBlocks(double x, double y, double z);
 
-    @SuppressWarnings("OverwriteAuthorRequired")
+    /**
+     * @author peanut
+     * @reason Hydrogen intercepts outgoing chat for command handling.
+     */
     @Overwrite
     public void sendChatMessage(String message) {
         if(!Hydrogen.getClient().panic) {

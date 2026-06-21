@@ -47,7 +47,8 @@ public abstract class MixinRender<T extends Entity> {
     @Shadow @Final protected RenderManager renderManager;
 
     /**
-     * @author
+     * @author peanut
+     * @reason Hydrogen hooks entity rendering.
      */
     @Overwrite
     public void doRender(T entity, double x, double y, double z, float entityYaw, float partialTicks) {
@@ -153,7 +154,8 @@ public abstract class MixinRender<T extends Entity> {
     }
 
     /**
-     * @author
+     * @author peanut
+     * @reason Hydrogen customizes entity nametag rendering.
      */
     @Overwrite
     protected void renderLivingLabel(T entityIn, String str, double x, double y, double z, int maxDistance) {
