@@ -34,10 +34,10 @@ public abstract class MixinRendererLivingEntity<T extends EntityLivingBase> exte
     @Shadow
     protected ModelBase mainModel;
     
-    @Shadow
+    @Shadow(remap = false)
     public static float NAME_TAG_RANGE = 64.0F;
-    
-    @Shadow
+
+    @Shadow(remap = false)
     public static float NAME_TAG_RANGE_SNEAK = 32.0F;
 
     @Shadow protected abstract int getColorMultiplier(T entitylivingbaseIn, float lightBrightness, float partialTickTime);
@@ -67,6 +67,10 @@ public abstract class MixinRendererLivingEntity<T extends EntityLivingBase> exte
     }
 
 
+    /**
+     * @author peanut
+     * @reason Render ESP/Chams outlines around the entity model
+     */
     @Overwrite
     protected void renderModel(T entitylivingbaseIn, float p_77036_2_, float p_77036_3_, float p_77036_4_, float p_77036_5_, float p_77036_6_, float p_77036_7_) {
 
@@ -128,6 +132,10 @@ public abstract class MixinRendererLivingEntity<T extends EntityLivingBase> exte
         }
     }
 
+    /**
+     * @author peanut
+     * @reason Custom hurt/armor-damage brightness overlay
+     */
     @Overwrite
     protected boolean setBrightness(T entitylivingbaseIn, float partialTicks, boolean combineTextures) {
         float f = entitylivingbaseIn.getBrightness(partialTicks);
@@ -207,6 +215,10 @@ public abstract class MixinRendererLivingEntity<T extends EntityLivingBase> exte
         }
     }
 
+    /**
+     * @author peanut
+     * @reason Apply custom brightness to armor layers
+     */
     @Overwrite
     protected void renderLayers(T entitylivingbaseIn, float p_177093_2_, float p_177093_3_, float partialTicks, float p_177093_5_, float p_177093_6_, float p_177093_7_, float p_177093_8_) {
         for(LayerRenderer<T> layerrenderer : this.layerRenderers) {

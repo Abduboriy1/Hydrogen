@@ -153,6 +153,10 @@ public abstract class MixinEntityRenderer {
         }
     }
 
+    /**
+     * @author peanut
+     * @reason Custom raytrace/reach handling for mouse-over target
+     */
     @Overwrite
     public void getMouseOver(float p_getMouseOver_1_) {
         Entity entity = this.mc.getRenderViewEntity();

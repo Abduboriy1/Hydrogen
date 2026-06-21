@@ -22,7 +22,8 @@ public class MixinInventoryEffectRenderer extends MixinGuiContainer {
     @Shadow private boolean hasActivePotionEffects;
 
     /**
-     * @author
+     * @author peanut
+     * @reason Custom active-potion HUD layout
      */
     @Overwrite
     protected void updateActivePotionEffects() {

@@ -37,6 +37,10 @@ public abstract class MixinAbstractClientPlayer extends MixinEntityPlayer {
     @Shadow
     private NetworkPlayerInfo playerInfo;
 
+    /**
+     * @author peanut
+     * @reason Custom FOV modifier handling
+     */
     @Overwrite
     public float getFovModifier() {
         float f = 1.0F;

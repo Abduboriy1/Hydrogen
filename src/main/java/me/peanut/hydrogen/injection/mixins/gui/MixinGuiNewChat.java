@@ -55,7 +55,8 @@ public abstract class MixinGuiNewChat extends MixinGui {
     private boolean isScrolled;
 
     /**
-     * @author
+     * @author peanut
+     * @reason Custom chat rendering
      */
     @Overwrite
     public void drawChat(int updateCounter) {

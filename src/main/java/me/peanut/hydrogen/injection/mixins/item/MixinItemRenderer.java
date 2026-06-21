@@ -82,7 +82,8 @@ public abstract class MixinItemRenderer {
     }
 
     /**
-     * @author
+     * @author peanut
+     * @reason Custom first-person item animations
      */
     @Overwrite
     public void renderItemInFirstPerson(float partialTicks) {

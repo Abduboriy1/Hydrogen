@@ -38,7 +38,7 @@ public abstract class MixinEntityPlayer extends MixinEntityLivingBase {
     @Shadow
     public PlayerCapabilities capabilities = new PlayerCapabilities();
 
-    @Shadow public float eyeHeight;
+    @Shadow(remap = false) public float eyeHeight;
 
     @Shadow public abstract boolean isPlayerSleeping();
 
@@ -47,7 +47,8 @@ public abstract class MixinEntityPlayer extends MixinEntityLivingBase {
     @Shadow public abstract void onLivingUpdate();
 
     /**
-     * @author
+     * @author peanut
+     * @reason Adjust eye height for custom sneak/sleep/animation behaviour
      */
     @Overwrite
     public float getEyeHeight() {

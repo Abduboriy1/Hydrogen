@@ -69,7 +69,10 @@ public abstract class MixinGuiIngame extends MixinGui {
         EventManager.call(e);
     }
 
-    @SuppressWarnings("OverwriteAuthorRequired")
+    /**
+     * @author peanut
+     * @reason Custom hotbar/tooltip rendering
+     */
     @Overwrite
     protected void renderTooltip(ScaledResolution sr, float partialTicks) {
         if (Hydrogen.getClient().moduleManager.getModulebyName("Hotbar").isEnabled() && !(Hydrogen.getClient().panic)) {

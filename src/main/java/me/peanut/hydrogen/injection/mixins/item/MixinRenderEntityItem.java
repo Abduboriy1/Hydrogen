@@ -9,7 +9,6 @@ import net.minecraft.client.renderer.block.model.ItemCameraTransforms;
 import net.minecraft.client.renderer.entity.RenderEntityItem;
 import net.minecraft.client.renderer.entity.RenderItem;
 import net.minecraft.client.resources.model.IBakedModel;
-import net.minecraft.entity.Entity;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
@@ -31,16 +30,17 @@ public abstract class MixinRenderEntityItem extends MixinRender<EntityItem> {
 
     @Shadow private Random field_177079_e;
 
-    @Shadow protected abstract ResourceLocation getEntityTexture(Entity par1);
+    @Shadow protected abstract ResourceLocation getEntityTexture(EntityItem par1);
 
     @Shadow @Final private RenderItem itemRenderer;
 
-    @Shadow public abstract boolean shouldBob();
+    @Shadow(remap = false) public abstract boolean shouldBob();
 
     @Shadow protected abstract int func_177078_a(ItemStack stack);
 
     /**
-     * @author
+     * @author peanut
+     * @reason Custom dropped-item rendering
      */
     @Overwrite
     public void doRender(EntityItem entity, double x, double y, double z, float entityYaw, float partialTicks) {
@@ -110,7 +110,8 @@ public abstract class MixinRenderEntityItem extends MixinRender<EntityItem> {
     }
 
     /**
-     * @author
+     * @author peanut
+     * @reason Custom dropped-item transform/flattening
      */
     @Overwrite
     private int func_177077_a(EntityItem itemIn, double p_177077_2_, double p_177077_4_, double p_177077_6_, float p_177077_8_, IBakedModel p_177077_9_) {
