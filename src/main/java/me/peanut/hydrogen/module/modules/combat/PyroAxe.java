@@ -20,10 +20,18 @@ import java.util.Random;
 
 /**
  * Crit-axe combat module. Attacks a reachable living entity during the falling phase
- * of a jump (vanilla 1.8 critical-hit condition). Optional Aim smoothly eases rotation
- * onto the target - Speed controls how fast, Radius the search range. Reach and CPS are
- * min/max ranges - a fresh value is rolled per crit window (reach) and per swing (CPS).
- * Selection mode locks targeting to a middle-clicked entity only.
+ * of a jump (vanilla 1.8 critical-hit condition). Reach and CPS are min/max ranges - a
+ * fresh value is rolled per crit window (reach) and per swing (CPS). Selection mode locks
+ * targeting to a middle-clicked entity only.
+ *
+ * Optional Aim (ported from fusion's aim assist): yaw always tracks the target, smoothed
+ * by a divisor (Smooth - bigger is slower). Pitch is boxed to the target's body via a
+ * head pitch and a feet pitch (the head-foot technique) - within that range vertical aim
+ * is left free, only past the head or feet is pitch pulled back to the nearest edge.
+ * RandomYaw/RandomPitch add per-tick noise; Adaptive biases the yaw offset with the A/D
+ * strafe keys; GCD snaps rotation deltas to the mouse-sensitivity grid so they read like
+ * real mouse input (a rotation-analysis bypass the reference didn't have). AimFOV gates
+ * how far off-crosshair a target may be before the aim engages.
  */
 @Info(name = "PyroAxe", description = "Auto-attacks on crit-hit opportunities", category = Category.Combat)
 public class PyroAxe extends Module {
@@ -40,7 +48,8 @@ public class PyroAxe extends Module {
 
     // Aim state handed from the tick to the render pass (where the camera actually turns).
     private Entity aimTarget;
-    private double savedSpeed, savedSmoothness, savedPitchRatio, savedJitter;
+    private double savedSmooth, savedRandomYaw, savedRandomPitch, savedAdaptiveOffset;
+    private boolean savedAdaptive, savedGcd;
 
     public PyroAxe() {
         addSetting(new Setting("ReachMin", this, 3, 3, 7, false));
@@ -48,10 +57,13 @@ public class PyroAxe extends Module {
         addSetting(new Setting("CPSMin", this, 8, 1, 20, true));
         addSetting(new Setting("CPSMax", this, 11, 1, 20, true));
         addSetting(new Setting("Aim", this, false));
-        addSetting(new Setting("AimSpeed", this, 3, 1, 10, false));
-        addSetting(new Setting("Smoothness", this, 0.55, 0.1, 1, false));
-        addSetting(new Setting("PitchRatio", this, 0.6, 0.1, 1, false));
-        addSetting(new Setting("Jitter", this, 0.15, 0, 0.5, false));
+        addSetting(new Setting("AimFOV", this, 40, 5, 180, false));
+        addSetting(new Setting("Smooth", this, 18, 1, 90, false));
+        addSetting(new Setting("RandomYaw", this, 2, 0, 10, false));
+        addSetting(new Setting("RandomPitch", this, 0.15, 0, 1, false));
+        addSetting(new Setting("Adaptive", this, false));
+        addSetting(new Setting("AdaptiveOffset", this, 3, 0.1, 15, false));
+        addSetting(new Setting("GCD", this, true));
         addSetting(new Setting("Radius", this, 5, 3, 12, false));
         addSetting(new Setting("VisibleOnly", this, true));
         addSetting(new Setting("StickyTime", this, 3, 0, 10, false));
@@ -84,156 +96,222 @@ public class PyroAxe extends Module {
         currentReach = 0;
     }
 
+    /**
+     * Per-tick orchestrator. Each numbered phase lives in its own method below; this just
+     * wires them together and keeps the crash-guard around the whole pass. The reachability
+     * check and the {@code ready} gate stay inline because they tie the phases together.
+     */
     @EventTarget
     public void onUpdate(EventUpdate e) {
       try {
         if (mc.thePlayer == null || mc.theWorld == null) return;
 
-        double reachMin = getValue("ReachMin", 3);
-        double reachMax = getValue("ReachMax", 4);
-        double cpsMin = getValue("CPSMin", 8);
-        double cpsMax = getValue("CPSMax", 11);
-        boolean aim = isEnabled("Aim", false);
-        double aimSpeed = getValue("AimSpeed", 3);
-        double smoothness = getValue("Smoothness", 0.55);
-        double pitchRatio = getValue("PitchRatio", 0.6);
-        double jitter = getValue("Jitter", 0.15);
-        double radius = getValue("Radius", 5);
-        boolean visibleOnly = isEnabled("VisibleOnly", true);
-        double stickyTime = getValue("StickyTime", 3);
-        boolean selection = isEnabled("Selection", false);
-        boolean critOnly = isEnabled("CritOnly", false);
-        boolean logging = isEnabled("Logging", false);
+        Config c = readConfig();
 
-        // 1. Crit-hit state: vanilla 1.8 condition - the falling phase of a jump.
-        //    Roll a fresh reach value each time a new crit window opens.
-        boolean crit = mc.thePlayer.fallDistance > 0.0F
-                && !mc.thePlayer.onGround
-                && !mc.thePlayer.isOnLadder()
-                && !mc.thePlayer.isInWater()
-                && mc.thePlayer.motionY < 0;
-        if (crit && critSince == 0L) {
-            critSince = System.currentTimeMillis();
-            currentReach = randomInRange(reachMin, reachMax);
-        }
-        if (!crit) critSince = 0L;
-        double reach = currentReach > 0 ? currentReach : randomInRange(reachMin, reachMax);
+        // 1. Crit-hit window (vanilla 1.8 falling-phase condition) + fresh reach roll.
+        boolean crit = inCritWindow();
+        updateCritWindow(crit, c);
+        double reach = currentReach > 0 ? currentReach : randomInRange(c.reachMin, c.reachMax);
 
-        // 2. Crosshair target this tick (raytrace result).
-        Entity crosshairEntity = (mc.objectMouseOver != null
-                && mc.objectMouseOver.entityHit instanceof EntityLivingBase)
-                ? mc.objectMouseOver.entityHit : null;
+        // 2-4. Resolve the tracked entity from crosshair / selection / sticky / nearest.
+        Entity crosshair = crosshairEntity();
+        updateSelection(c, crosshair);
+        boolean stickyValid = refreshSticky(c);
+        Entity target = resolveTarget(c, crosshair, stickyValid);
 
-        // 3. Selection mode: middle-click (LWJGL button 2) locks the crosshair target.
-        //    We only read mouse state - we never consume vanilla pick-block.
-        if (selection) {
-            boolean middleDown = Mouse.isButtonDown(2);
-            if (middleDown && !middlePrev && crosshairEntity != null) {
-                selectedTarget = crosshairEntity;
-                Utils.sendChatMessage("[PyroAxe] target locked: " + selectedTarget.getName());
-            }
-            middlePrev = middleDown;
-        } else if (selectedTarget != null) {
-            selectedTarget = null; // selection turned off - drop any lock
-        }
-
-        // Sticky lock expires once the window elapses or the entity dies.
-        long stickyMs = (long) (stickyTime * 1000);
-        boolean stickyValid = stickyTarget != null && isAlive(stickyTarget) && stickyMs > 0
-                && System.currentTimeMillis() - stickySince <= stickyMs;
-        if (!stickyValid) stickyTarget = null;
-
-        // 4. Determine the tracked entity.
-        //    Selection ON  -> only the locked entity is ever a target (no fallback).
-        //    Selection OFF -> sticky lock (recent hit), then crosshair, then nearest.
-        Entity target;
-        if (selection) {
-            target = selectedTarget;
-        } else if (stickyValid) {
-            target = stickyTarget;
-        } else {
-            target = crosshairEntity;
-            if (target == null && aim) target = findNearest(radius, visibleOnly);
-        }
-
+        // Reachability glue: feeds both the attack gate and the logging line.
         boolean crosshairOver;
         boolean reachable = false;
         double distance = -1;
-
         if (isAlive(target)) {
             distance = mc.thePlayer.getDistanceToEntity(target);
             reachable = distance <= reach;
-            crosshairOver = target == crosshairEntity;
+            crosshairOver = target == crosshair;
         } else {
             crosshairOver = false;
-            if (selection && selectedTarget != null && !isAlive(selectedTarget)) {
+            if (c.selection && selectedTarget != null && !isAlive(selectedTarget)) {
                 Utils.sendChatMessage("[PyroAxe] selected target removed");
                 selectedTarget = null;
             }
             target = null; // dead/invalid - stop tracking immediately
         }
 
-        // 5. Aim: hand the target to the render pass so the real camera turns (applying
-        //    rotation here is silent-only - the tick pipeline restores it post-packet).
-        //    Skip when VisibleOnly is set and blocks obstruct line-of-sight.
-        if (aim && isAlive(target) && (!visibleOnly || mc.thePlayer.canEntityBeSeen(target))) {
-            aimTarget = target;
-            savedSpeed = aimSpeed;
-            savedSmoothness = smoothness;
-            savedPitchRatio = pitchRatio;
-            savedJitter = jitter;
-        } else {
-            aimTarget = null;
-        }
+        // 5. Hand the target to the render pass for the live aim.
+        updateAim(c, target);
 
-        // 6. Opportunity state. With CritOnly, a non-crit tick is never an opportunity.
-        //    crosshairOver is required: we only ever hit the entity the real crosshair is
-        //    actually on - never a silent hit on a sticky/nearest target off-center. Aim (if
-        //    enabled) turns the live camera onto the target, after which it becomes the
-        //    crosshair entity and this gate opens legitimately.
+        // 6. Opportunity gate. crosshairOver is required: we only ever hit the entity the
+        //    real crosshair is on - never a silent hit on a sticky/nearest off-center target.
         boolean ready = crit && reachable && isAlive(target) && crosshairOver;
-        if (critOnly && !crit) {
-            if (lastReady && logging) Utils.sendChatMessage("[PyroAxe] opportunity lost");
+        if (c.critOnly && !crit) {
+            if (lastReady && c.logging) Utils.sendChatMessage("[PyroAxe] opportunity lost");
             lastReady = false;
             return;
         }
 
-        // 7. Attack: swing + send attack packet, throttled to a CPS rolled from the range.
-        if (ready) {
-            double cps = randomInRange(cpsMin, cpsMax);
-            if (cps < 1) cps = 1;
-            long delay = Math.round(1000.0 / cps);
-            if (time.isDelayComplete(delay) && mc.playerController != null) {
-                mc.thePlayer.swingItem();
-                mc.playerController.attackEntity(mc.thePlayer, target);
-                time.setLastMS();
-                // Non-selection: first hit locks this target for the sticky window.
-                if (!selection && stickyTime > 0) {
-                    stickyTarget = target;
-                    stickySince = System.currentTimeMillis();
-                }
-            }
-        }
+        // 7. Attack, throttled to a CPS rolled from the range.
+        if (ready) tryAttack(c, target);
 
-        // 8. Optional diagnostic logging on opportunity-state transitions.
-        if (logging && ready != lastReady) {
-            if (ready) {
-                long heldMs = critSince == 0L ? 0L : System.currentTimeMillis() - critSince;
-                Utils.sendChatMessage(String.format(
-                        "[PyroAxe] CRIT READY | target=%s dist=%.2f reach<=%.1f crosshair=%b | onGround=%b motionY=%.3f fall=%.2f sprint=%b sneak=%b | heldMs=%d",
-                        target == null ? "none" : target.getName(),
-                        distance, reach, crosshairOver,
-                        mc.thePlayer.onGround, mc.thePlayer.motionY, mc.thePlayer.fallDistance,
-                        mc.thePlayer.isSprinting(), mc.thePlayer.isSneaking(), heldMs));
-            } else {
-                Utils.sendChatMessage("[PyroAxe] opportunity lost");
-            }
-        }
+        // 8. Diagnostic logging on opportunity-state transitions.
+        logTransition(c, ready, target, distance, reach, crosshairOver);
         lastReady = ready;
       } catch (Exception ex) {
         aimTarget = null;
         if (isEnabled("Logging", false)) Utils.sendChatMessage("[PyroAxe] error: " + ex);
       }
+    }
+
+    /** True during the vanilla 1.8 critical-hit window: the falling phase of a jump. */
+    private boolean inCritWindow() {
+        return mc.thePlayer.fallDistance > 0.0F
+                && !mc.thePlayer.onGround
+                && !mc.thePlayer.isOnLadder()
+                && !mc.thePlayer.isInWater()
+                && mc.thePlayer.motionY < 0;
+    }
+
+    /**
+     * Track the crit window's lifetime. On the tick a fresh window opens, stamp {@code critSince}
+     * and roll a new reach value (held for the whole window); clear the stamp once it closes.
+     */
+    private void updateCritWindow(boolean crit, Config c) {
+        if (crit && critSince == 0L) {
+            critSince = System.currentTimeMillis();
+            currentReach = randomInRange(c.reachMin, c.reachMax);
+        }
+        if (!crit) critSince = 0L;
+    }
+
+    /** The living entity under the crosshair this tick (raytrace result), or null. */
+    private Entity crosshairEntity() {
+        return (mc.objectMouseOver != null
+                && mc.objectMouseOver.entityHit instanceof EntityLivingBase)
+                ? mc.objectMouseOver.entityHit : null;
+    }
+
+    /**
+     * Selection mode: middle-click (LWJGL button 2) locks the crosshair entity as the only
+     * target. We only read mouse state - never consume vanilla pick-block. With selection off,
+     * drop any existing lock.
+     */
+    private void updateSelection(Config c, Entity crosshair) {
+        if (c.selection) {
+            boolean middleDown = Mouse.isButtonDown(2);
+            if (middleDown && !middlePrev && crosshair != null) {
+                selectedTarget = crosshair;
+                Utils.sendChatMessage("[PyroAxe] target locked: " + selectedTarget.getName());
+            }
+            middlePrev = middleDown;
+        } else if (selectedTarget != null) {
+            selectedTarget = null; // selection turned off - drop any lock
+        }
+    }
+
+    /** Validate the sticky lock (alive + within window), expiring it otherwise. */
+    private boolean refreshSticky(Config c) {
+        long stickyMs = (long) (c.stickyTime * 1000);
+        boolean stickyValid = stickyTarget != null && isAlive(stickyTarget) && stickyMs > 0
+                && System.currentTimeMillis() - stickySince <= stickyMs;
+        if (!stickyValid) stickyTarget = null;
+        return stickyValid;
+    }
+
+    /**
+     * Pick the tracked entity. Selection ON -> only the locked entity (no fallback).
+     * Selection OFF -> sticky lock (recent hit), then crosshair, then nearest (aim only).
+     */
+    private Entity resolveTarget(Config c, Entity crosshair, boolean stickyValid) {
+        if (c.selection) return selectedTarget;
+        if (stickyValid) return stickyTarget;
+        Entity target = crosshair;
+        if (target == null && c.aim) target = findNearest(c.radius, c.visibleOnly);
+        return target;
+    }
+
+    /**
+     * Aim: hand the target to the render pass so the real camera turns (applying rotation here
+     * is silent-only - the tick pipeline restores it post-packet). Skip when VisibleOnly is set
+     * and blocks obstruct line-of-sight, or the target sits outside the FOV gate.
+     */
+    private void updateAim(Config c, Entity target) {
+        if (c.aim && isAlive(target) && (!c.visibleOnly || mc.thePlayer.canEntityBeSeen(target))
+                && withinFov(target, c.aimFov)) {
+            aimTarget = target;
+            savedSmooth = c.smooth;
+            savedRandomYaw = c.randomYaw;
+            savedRandomPitch = c.randomPitch;
+            savedAdaptive = c.adaptive;
+            savedAdaptiveOffset = c.adaptiveOffset;
+            savedGcd = c.gcd;
+        } else {
+            aimTarget = null;
+        }
+    }
+
+    /** Swing + send the attack packet, throttled to a CPS rolled from the range. */
+    private void tryAttack(Config c, Entity target) {
+        double cps = randomInRange(c.cpsMin, c.cpsMax);
+        if (cps < 1) cps = 1;
+        long delay = Math.round(1000.0 / cps);
+        if (time.isDelayComplete(delay) && mc.playerController != null) {
+            mc.thePlayer.swingItem();
+            mc.playerController.attackEntity(mc.thePlayer, target);
+            time.setLastMS();
+            // Non-selection: first hit locks this target for the sticky window.
+            if (!c.selection && c.stickyTime > 0) {
+                stickyTarget = target;
+                stickySince = System.currentTimeMillis();
+            }
+        }
+    }
+
+    /** Optional diagnostic logging, fired only on opportunity-state transitions. */
+    private void logTransition(Config c, boolean ready, Entity target, double distance,
+                               double reach, boolean crosshairOver) {
+        if (!c.logging || ready == lastReady) return;
+        if (ready) {
+            long heldMs = critSince == 0L ? 0L : System.currentTimeMillis() - critSince;
+            Utils.sendChatMessage(String.format(
+                    "[PyroAxe] CRIT READY | target=%s dist=%.2f reach<=%.1f crosshair=%b | onGround=%b motionY=%.3f fall=%.2f sprint=%b sneak=%b | heldMs=%d",
+                    target == null ? "none" : target.getName(),
+                    distance, reach, crosshairOver,
+                    mc.thePlayer.onGround, mc.thePlayer.motionY, mc.thePlayer.fallDistance,
+                    mc.thePlayer.isSprinting(), mc.thePlayer.isSneaking(), heldMs));
+        } else {
+            Utils.sendChatMessage("[PyroAxe] opportunity lost");
+        }
+    }
+
+    /** Immutable snapshot of every setting, read once per tick (null-safe via getValue/isEnabled). */
+    private Config readConfig() {
+        return new Config(this);
+    }
+
+    /** Holds all 18 setting values for one tick so phase methods don't pass long param lists. */
+    private final class Config {
+        final double reachMin, reachMax, cpsMin, cpsMax, aimFov, smooth,
+                randomYaw, randomPitch, adaptiveOffset, radius, stickyTime;
+        final boolean aim, adaptive, gcd, visibleOnly, selection, critOnly, logging;
+
+        Config(PyroAxe m) {
+            reachMin = m.getValue("ReachMin", 3);
+            reachMax = m.getValue("ReachMax", 4);
+            cpsMin = m.getValue("CPSMin", 8);
+            cpsMax = m.getValue("CPSMax", 11);
+            aim = m.isEnabled("Aim", false);
+            aimFov = m.getValue("AimFOV", 40);
+            smooth = m.getValue("Smooth", 18);
+            randomYaw = m.getValue("RandomYaw", 2);
+            randomPitch = m.getValue("RandomPitch", 0.15);
+            adaptive = m.isEnabled("Adaptive", false);
+            adaptiveOffset = m.getValue("AdaptiveOffset", 3);
+            gcd = m.isEnabled("GCD", true);
+            radius = m.getValue("Radius", 5);
+            visibleOnly = m.isEnabled("VisibleOnly", true);
+            stickyTime = m.getValue("StickyTime", 3);
+            selection = m.isEnabled("Selection", false);
+            critOnly = m.isEnabled("CritOnly", false);
+            logging = m.isEnabled("Logging", false);
+        }
     }
 
     /**
@@ -249,7 +327,8 @@ public class PyroAxe extends Module {
             aimTarget = null;
             return;
         }
-        aimAt(aimTarget, e.getPartialTicks(), savedSpeed, savedSmoothness, savedPitchRatio, savedJitter);
+        aimAt(aimTarget, e.getPartialTicks(), savedSmooth, savedRandomYaw, savedRandomPitch,
+                savedAdaptive, savedAdaptiveOffset, savedGcd);
       } catch (Exception ex) {
         aimTarget = null;
         if (isEnabled("Logging", false)) Utils.sendChatMessage("[PyroAxe] error: " + ex);
@@ -316,53 +395,84 @@ public class PyroAxe extends Module {
                 && ((EntityLivingBase) entity).getHealth() > 0F;
     }
 
-    /**
-     * Move the head toward the target's eyes with human-like motion. {@code speed} is the
-     * max degrees turned per tick. Yaw leads, pitch trails by {@code pitchRatio} (vertical
-     * aim is slower for a real player); each axis eases out by {@code smoothness} near the
-     * target and carries {@code jitter} so the motion isn't perfectly linear.
-     */
-    private void aimAt(Entity target, float partialTicks, double speed, double smoothness, double pitchRatio, double jitter) {
-        Vec3 self = mc.thePlayer.getPositionEyes(partialTicks);
-        Vec3 tgt = target.getPositionEyes(partialTicks);
-        double diffX = tgt.xCoord - self.xCoord;
-        double diffY = tgt.yCoord - self.yCoord;
-        double diffZ = tgt.zCoord - self.zCoord;
-        double diffXZ = Math.sqrt(diffX * diffX + diffZ * diffZ);
+    /** Yaw to the target's horizontal position; -90 maps atan2 into MC's yaw convention. */
+    private float yawTo(Entity target) {
+        double dx = target.posX - mc.thePlayer.posX;
+        double dz = target.posZ - mc.thePlayer.posZ;
+        return (float) Math.toDegrees(Math.atan2(dz, dx)) - 90F;
+    }
 
-        float targetYaw = (float) Math.toDegrees(Math.atan2(diffZ, diffX)) - 90F;
-        float targetPitch = (float) -Math.toDegrees(Math.atan2(diffY, diffXZ));
-
-        float yawCap = (float) speed;
-        float pitchCap = (float) (speed * pitchRatio); // vertical lags horizontal
-
-        mc.thePlayer.rotationYaw = smoothHeadMovement(mc.thePlayer.rotationYaw, targetYaw, yawCap, smoothness, jitter);
-        mc.thePlayer.rotationPitch = smoothHeadMovement(mc.thePlayer.rotationPitch, targetPitch, pitchCap, smoothness, jitter);
-        mc.thePlayer.rotationPitch = MathHelper.clamp_float(mc.thePlayer.rotationPitch, -90F, 90F);
+    /** True if the target is within {@code fov} degrees of the current yaw (fusion's gate). */
+    private boolean withinFov(Entity target, double fov) {
+        float diff = MathHelper.wrapAngleTo180_float(yawTo(target) - mc.thePlayer.rotationYaw);
+        return Math.abs(diff) <= fov;
     }
 
     /**
-     * Transition one angle toward another with natural inertia: ease out by
-     * {@code smoothness} as the gap closes, cap the per-tick turn at {@code speed}, and add
-     * {@code jitter} so the path looks hand-aimed rather than mechanical.
+     * Move the head toward the target, ported from fusion's aim assist.
+     *
+     * Yaw always tracks the target, smoothed by the {@code smooth} divisor (bigger is
+     * slower). Pitch is boxed to the target's body via a head pitch and a feet pitch: while
+     * the player's pitch sits between them vertical aim is left free (only a touch of
+     * {@code randomPitch} noise), and only past the head (up) or feet (down) is pitch eased
+     * back to the nearest edge. {@code randomYaw} adds per-tick yaw noise; {@code adaptive}
+     * biases the yaw offset with the A/D strafe keys; {@code gcd} snaps the resulting
+     * rotation deltas to the mouse-sensitivity grid so they look like real mouse input.
      */
-    private float smoothHeadMovement(float current, float target, float speed, double smoothness, double jitter) {
-        float diff = target - current;
+    private void aimAt(Entity target, float partialTicks, double smooth, double randomYaw, double randomPitch,
+                       boolean adaptive, double adaptiveOffset, boolean gcd) {
+        Vec3 self = mc.thePlayer.getPositionEyes(partialTicks);
 
-        // Normalize to -180..180 so we turn the short way around.
-        while (diff <= -180.0F) diff += 360.0F;
-        while (diff > 180.0F) diff -= 360.0F;
+        // Partial-tick interpolated target position for smooth render-time aim.
+        double tx = target.lastTickPosX + (target.posX - target.lastTickPosX) * partialTicks;
+        double ty = target.lastTickPosY + (target.posY - target.lastTickPosY) * partialTicks;
+        double tz = target.lastTickPosZ + (target.posZ - target.lastTickPosZ) * partialTicks;
+        double height = target.getEyeHeight() - 0.1; // fusion: target.height - 0.1
 
-        // Ease-out: cover a fraction of the remaining gap, decelerating near the target.
-        float step = diff * (float) smoothness;
+        double dx = tx - self.xCoord;
+        double dz = tz - self.zCoord;
+        double dxz = Math.sqrt(dx * dx + dz * dz);
 
-        // Inertia: never turn more than the per-tick speed cap.
-        if (step > speed) step = speed;
-        if (step < -speed) step = -speed;
+        float targetYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90F;
+        // MC convention: looking down is +pitch, so head (higher) is the smaller bound.
+        float pitchFoot = (float) -Math.toDegrees(Math.atan2(ty - self.yCoord, dxz));
+        float pitchHead = (float) -Math.toDegrees(Math.atan2(ty + height - self.yCoord, dxz));
 
-        // Human imperfection: small jitter scaled to how far we still move.
-        step += (random.nextFloat() - 0.5F) * speed * (float) jitter;
+        float curYaw = mc.thePlayer.rotationYaw;
+        float curPitch = mc.thePlayer.rotationPitch;
 
-        return current + step;
+        // Yaw: always track, divisor smoothing, random + strafe-adaptive offset.
+        float yawDiff = MathHelper.wrapAngleTo180_float(targetYaw - curYaw);
+        float offset = (random.nextFloat() * 2F - 1F) * (float) randomYaw;
+        if (adaptive) {
+            boolean a = mc.gameSettings.keyBindLeft.isKeyDown();   // strafe left
+            boolean d = mc.gameSettings.keyBindRight.isKeyDown();  // strafe right
+            if (d && !a) offset -= (float) adaptiveOffset;
+            if (a && !d) offset += (float) adaptiveOffset;
+        }
+        float newYaw = curYaw + (yawDiff + offset) / (float) smooth;
+
+        // Pitch: free within the head-foot box, eased to the nearest edge once outside it.
+        float newPitch;
+        if (curPitch > pitchFoot || curPitch < pitchHead) {
+            float dFoot = Math.abs(MathHelper.wrapAngleTo180_float(pitchFoot - curPitch));
+            float dHead = Math.abs(MathHelper.wrapAngleTo180_float(pitchHead - curPitch));
+            float bound = dFoot < dHead ? pitchFoot : pitchHead;
+            newPitch = curPitch + MathHelper.wrapAngleTo180_float(bound - curPitch) / (float) smooth;
+        } else {
+            newPitch = curPitch;
+        }
+        newPitch += (random.nextFloat() * 2F - 1F) * (float) randomPitch;
+
+        // GCD: round the rotation deltas to the mouse-sensitivity grid (rotation bypass).
+        if (gcd) {
+            float f = mc.gameSettings.mouseSensitivity * 0.6F + 0.2F;
+            float g = f * f * f * 8.0F;
+            newYaw = curYaw + Math.round((newYaw - curYaw) / g) * g;
+            newPitch = curPitch + Math.round((newPitch - curPitch) / g) * g;
+        }
+
+        mc.thePlayer.rotationYaw = newYaw;
+        mc.thePlayer.rotationPitch = MathHelper.clamp_float(newPitch, -90F, 90F);
     }
 }
