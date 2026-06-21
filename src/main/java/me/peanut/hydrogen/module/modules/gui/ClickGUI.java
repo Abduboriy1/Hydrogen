@@ -14,7 +14,7 @@ import java.util.ArrayList;
  * Created by peanut on 03/02/2021
  */
 
-@Info(name = "ClickGUI", description = "The click gui", category = Category.Gui, keybind = Keyboard.KEY_LSHIFT)
+@Info(name = "ClickGUI", description = "The click gui", category = Category.Gui, keybind = Keyboard.KEY_RSHIFT)
 public class ClickGUI extends Module {
 
     public ClickGui clickgui;

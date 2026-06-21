@@ -51,6 +51,7 @@ public class ModuleManager {
         add(new AutoClicker());
         add(new ESP());
         add(new TriggerBot());
+        add(new PyroAxe());
         add(new NoBob());
 
         // 1.2
